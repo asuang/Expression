@@ -1,0 +1,85 @@
+#从ncbi上下载数据
+for i in `seq 89 99`;
+do
+prefetch SRR89071${i}
+done
+
+#解压
+for item in $(ls *.sra)
+do 
+	echo "sra_${item%.*}"
+
+   fastq-dump --gzip --split-3 -O ./fastq/ -A ${item%.*}.sra
+done
+
+#${var%pattern}表示从变量var的结尾删除最短匹配pattern的字串，那么
+echo "sra_${item%.*}"，则打印sra_SRR100587xx,删除了.右边的内容
+
+#一般使用fastq-dump的方式为
+#fastq-dump /path/to/xxx.sra
+#但这个默认使用方法得到结果往往很糟糕，比如说他默认会把双端测序结果
+保存到一个文件里，但是如果你加上--split-3之后，他会把原来双端拆分成
+两个文件，但是原来单端并不会保存成两个文件。还有你用--gzip就能输出
+gz格式，能够节省空间的同时也不会给后续比对软件造成压力。
+#-0 输出到指定文件夹
+#-A 输入你的sra文件
+
+#解压fastq.gz
+gzip -d *.gz
+
+#-d ：解开压缩文件
+
+#剪切和过滤质量
+mkdir ../clipper_fastq
+mkdir ../quality
+for item in $(ls *.sra.fastq)
+do
+	echo "clipper_${item%.*}"
+	fastx_clipper -a CTGTAGGCACCATCA -l 20 -d 0 -Q 33 -i ./${item%.*}.sra.fastq -o ../clipper_fastq/${item%.*}_tri.fastq
+
+	echo "quality_${item%.*}"
+	fastq_quality_filter -q 20 -p 80 -Q 33 -i ../clipper_fastq/${item%.*}_tri.fastq -o ../quality/${item%.*}_qua.fastq
+done
+
+cd ../quality
+rename 's/_qua//' *
+
+#使用FASTX-Toolkit fastx_clipper去3'端adapter接头序列，仅支持单端测序
+https://www.cnblogs.com/zkkaka/p/6146293.html
+https://blog.csdn.net/whiffen_cann/article/details/56485341
+fastx_clipper 
+-a ADAPTER：接头序列
+-d N ：保留接头序列后的N个碱基，默认-d 0
+-i ：输入文件
+-o ：输出文件
+-Q ：对illumina测序来说，这个参数也是必须要加的，因为illumina测序
+在给单个碱基作质量打分的时候，加上了33，然后才转成ASCII，因此在这里
+需要加-Q 33.否则会报错：fastx_clipper:Invalid quality score value(char '#' ord 35 quality value -29) on line 4.
+
+#fastq_quality_filter根据质量截取序列，质量值低的3'端部分会被截短，
+如果截取之后剩余长度不足最小长度阈值，则这条read将会被过滤掉
+-q N ：最小的需要留下的质量值
+-p N ：每个reads中最少有百分之多少的碱基需要有-q的质量值
+-Q ：程序选用哪种质量标准（sanger -33；illumina -64）
+
+#比对
+mkdir ../aligned
+for item in $(ls *.sra)
+do
+	echo "hi_${item%.*}"
+	hisat2 -p 30 -t --dta -x /media/hp/disk1/DYY/reference/index/hg19/genome_index -1 ./${item%.*}.sra_1.fastq -2 ./${item%.*}.sra_2.fastq -S ../aligned/${item%.*}.sam 2>> ../aligned/mapping_repo.txt
+done
+
+-p ：比对线程数
+-t/-time ：打印搜索阶段的时间
+--dta ：输出转录组型的报告文件
+-x ：参考基因组索引文件的前缀
+-1 ：双端测序结果的第一个文件。若有多组数据，使用逗号将文件分隔，
+reads的长度可以不一致
+-2 ：双端测序结果的第二个文件。若有多组数据，使用逗号将文件分隔，
+并且文件顺序要和-1参数对应，reads的长度可以不一致
+-U ：单端数据文件。若有多组数据，使用逗号将文件分隔。可以和
+-1、-2参数同时使用。Reads长度可以不一致
+-S ：指定输出sam文件
+>> ：追加方式
+2 ：指标错误，默认也是终端
